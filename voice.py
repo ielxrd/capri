@@ -12,6 +12,7 @@ import shutil
 import struct
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 import wave
 
@@ -553,9 +554,27 @@ class Speaker:
             request = urllib.request.Request(self.voicestudio_url + "/v1/audio/speech",
                                              data=json.dumps(payload).encode("utf-8"),
                                              headers=headers, method="POST")
-            with urllib.request.urlopen(request, timeout=self.voicestudio_timeout) as response:
-                data = response.read()
-                content_type = response.headers.get("Content-Type", "").lower()
+            try:
+                with urllib.request.urlopen(request, timeout=self.voicestudio_timeout) as response:
+                    data = response.read()
+                    content_type = response.headers.get("Content-Type", "").lower()
+            except urllib.error.HTTPError as exc:
+                with exc:
+                    detail = exc.read(8192).decode("utf-8", errors="replace")
+                try:
+                    body = json.loads(detail)
+                    if isinstance(body, dict):
+                        detail = body.get("error", body.get("detail", body))
+                        if isinstance(detail, dict):
+                            detail = detail.get("message", detail)
+                        if not isinstance(detail, str):
+                            detail = json.dumps(detail, ensure_ascii=False)
+                except ValueError:
+                    pass
+                if key:
+                    detail = detail.replace(key, "[redacted]")
+                detail = " ".join(detail.split())[:2000]
+                raise RuntimeError(f"VoiceStudio HTTP {exc.code}: {detail or exc.reason}") from None
             if self.stop_event.is_set():
                 return dst
             if not data or len(data) % 2 or not content_type.startswith(("audio/", "application/octet-stream")):

@@ -15,12 +15,19 @@ from voice import Speaker
 class VoiceStudioTests(unittest.TestCase):
     def setUp(self):
         self.requests = []
+        self.error_body = None
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 owner.requests.append((self.path, payload, self.headers.get('Authorization')))
+                if owner.error_body is not None:
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(owner.error_body)
+                    return
                 self.send_response(200)
                 self.send_header('Content-Type', 'audio/pcm')
                 self.end_headers()
@@ -79,6 +86,19 @@ class VoiceStudioTests(unittest.TestCase):
             communicate.return_value.save = AsyncMock()
             self.assertEqual(self.speaker.render('Привет', self.dst), self.dst)
             communicate.return_value.save.assert_awaited()
+
+    def test_http_error_includes_server_reason(self):
+        self.error_body = json.dumps({'error': {'message': 'Model not available'}}).encode()
+        with self.assertRaisesRegex(RuntimeError, 'VoiceStudio HTTP 400: Model not available'):
+            self.speaker.render_voicestudio('Привет', self.dst)
+
+    def test_http_error_redacts_api_key(self):
+        self.error_body = b'{"detail":"Invalid credential test-secret"}'
+        with patch.dict(os.environ, {'VOICESTUDIO_API_KEY': 'test-secret'}):
+            with self.assertRaises(RuntimeError) as caught:
+                self.speaker.render_voicestudio('Привет', self.dst)
+        self.assertIn('[redacted]', str(caught.exception))
+        self.assertNotIn('test-secret', str(caught.exception))
 
 
 if __name__ == '__main__':
