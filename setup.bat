@@ -16,8 +16,9 @@ exit /b 1
 
 :install
 %PY% tools\install.py
+set "CAPRI_INSTALL_RESULT=%ERRORLEVEL%"
 pause
-exit /b
+exit /b %CAPRI_INSTALL_RESULT%
 
 :nopython
 echo [Capri] Python not found. Install Python 3.13 from https://www.python.org/ftp/python/3.13.17/python-3.13.17-amd64.exe
