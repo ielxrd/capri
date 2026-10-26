@@ -246,6 +246,35 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 Модель (~40 МБ) скачается сама. Лицензия Silero — только для некоммерческого использования.
 </details>
 
+### Озвучка через VoiceStudio
+
+Установи [VoiceStudio](https://github.com/debpalash/VoiceStudio), скачай в нём
+модель синтеза с поддержкой русского языка и проверь генерацию речи.
+VoiceStudio должен оставаться запущенным вместе с Капри.
+В `config.json` добавь или замени следующие поля и перезапусти Капри:
+
+```json
+"tts_engine": "voicestudio",
+"voicestudio_url": "http://127.0.0.1:3900",
+"voicestudio_model": "omnivoice",
+"voicestudio_voice": "default",
+"voicestudio_timeout": 60,
+"voice_fx": 0
+```
+
+`voicestudio_voice` — ID или имя созданного в VoiceStudio профиля голоса;
+`default` использует голос модели по умолчанию. `voicestudio_model` — ID движка
+VoiceStudio. `voice_rate` задаёт скорость, `voice_volume` — громкость,
+`voice_fx` позволяет вернуть цифровые эффекты Капри. Высота `voice_pitch`
+и случайные интонации `voice_lively` к этому движку не применяются.
+
+Капри обращается к `/v1/audio/speech`; дополнительные Python-библиотеки не нужны.
+Если API требует ключ, задай переменную окружения `VOICESTUDIO_API_KEY` перед
+запуском Капри. Для сервера на другом компьютере с авторизацией используй HTTPS.
+При ошибке или превышении тайм-аута Капри пробует голос Microsoft, затем Windows.
+Перебивание останавливает воспроизведение; уже отправленный запрос синтеза
+может завершаться до указанного тайм-аута и не отменяет генерацию на сервере.
+
 ---
 
 ## Если что-то не работает

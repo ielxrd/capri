@@ -12,6 +12,7 @@ import shutil
 import struct
 import tempfile
 import threading
+import urllib.request
 import wave
 
 log = logging.getLogger("capri")
@@ -420,7 +421,11 @@ class Speaker:
         self.fx = float(cfg.get("voice_fx", 1.0))  # 0 — чистый голос, 1 — цифровой голос Капри
         self.lively = bool(cfg.get("voice_lively", True))  # у каждой фразы своя высота
         self.shift = float(cfg.get("voice_shift", 2.0))      # общий подъём тона в полутонах
-        self.engine = cfg.get("tts_engine", "edge")          # edge — Microsoft онлайн, silero — офлайн
+        self.engine = cfg.get("tts_engine", "edge")
+        self.voicestudio_url = cfg.get("voicestudio_url", "http://127.0.0.1:3900").rstrip("/")
+        self.voicestudio_model = cfg.get("voicestudio_model", "omnivoice")
+        self.voicestudio_voice = cfg.get("voicestudio_voice", "default")
+        self.voicestudio_timeout = float(cfg.get("voicestudio_timeout", 60))
         self.silero_voice = cfg.get("silero_voice", "xenia")
         self.silero_pitch = cfg.get("silero_pitch", "high")
         self.path = os.path.join(tempfile.gettempdir(), f"capri_tts_{os.getpid()}.mp3")
@@ -483,6 +488,13 @@ class Speaker:
     def render(self, text, dst):
         """Синтез в wav-файл dst (с живой интонацией и эффектами) или в mp3, если обработка не удалась.
         Возвращает путь к готовому файлу."""
+        if self.engine == "voicestudio":
+            try:
+                return self.render_voicestudio(text, dst)
+            except Exception:
+                if self.stop_event.is_set():
+                    return dst
+                log.exception("VoiceStudio не сработал, говорю голосом Microsoft")
         if self.engine == "silero":
             try:
                 return self.render_silero(text, dst)
@@ -515,6 +527,47 @@ class Speaker:
         except Exception:
             log.exception("Обработка голоса не удалась, говорю чистым голосом")
             return parts[0]
+
+    def render_voicestudio(self, text, dst):
+        """Локальный OpenAI-compatible API: PCM 24 кГц, mono, signed int16 LE."""
+        import numpy as np
+        headers = {"Content-Type": "application/json"}
+        key = os.environ.get("VOICESTUDIO_API_KEY")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        chunks = []
+        remaining = text.strip()
+        while remaining:
+            if self.stop_event.is_set():
+                return dst
+            # API ограничивает input 4096 символами; по возможности сохраняем слова.
+            end = min(len(remaining), 4096)
+            if end < len(remaining):
+                end = remaining.rfind(" ", 0, end + 1) or end
+                if end < 1:
+                    end = 4096
+            part, remaining = remaining[:end], remaining[end:].lstrip()
+            payload = {"model": self.voicestudio_model, "voice": self.voicestudio_voice,
+                       "input": part, "language": "ru", "response_format": "pcm",
+                       "speed": max(0.25, min(4.0, 1 + _pct(self.rate) / 100))}
+            request = urllib.request.Request(self.voicestudio_url + "/v1/audio/speech",
+                                             data=json.dumps(payload).encode("utf-8"),
+                                             headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=self.voicestudio_timeout) as response:
+                data = response.read()
+                content_type = response.headers.get("Content-Type", "").lower()
+            if self.stop_event.is_set():
+                return dst
+            if not data or len(data) % 2 or not content_type.startswith(("audio/", "application/octet-stream")):
+                raise ValueError("VoiceStudio вернул некорректный PCM-аудиоответ")
+            chunks.append(np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768)
+        if not chunks:
+            raise ValueError("Нет текста для синтеза VoiceStudio")
+        audio = np.concatenate(chunks)
+        if self.fx > 0:
+            audio = fx_process(audio, self.fx)
+        write_wav(dst, audio, volume=self.volume)
+        return dst
 
     def _edge(self, text):
         path = self.render(text, self.fx_path)
